@@ -10,6 +10,7 @@ import arc.struct.*;
 import arc.util.*;
 import mindustry.*;
 import mindustry.content.*;
+import mindustry.entities.effect.*;
 import mindustry.gen.*;
 import mindustry.graphics.*;
 import mindustry.world.*;
@@ -22,7 +23,7 @@ public class Effect{
 
     public static final Seq<Effect> all = new Seq<>();
 
-    private boolean initialized;
+    private transient boolean initialized;
 
     public final int id;
 
@@ -30,10 +31,12 @@ public class Effect{
     public float lifetime = 50f;
     /** Clip size. */
     public float clip;
+    /** Time delay before the effect starts */
+    public float startDelay;
     /** Amount added to rotation */
     public float baseRotation;
     /** If true, parent unit is data are followed. */
-    public boolean followParent;
+    public boolean followParent = true;
     /** If this and followParent are true, the effect will offset and rotate with the parent's rotation. */
     public boolean rotWithParent;
 
@@ -56,6 +59,11 @@ public class Effect{
     public Effect(){
         this.id = all.size;
         all.add(this);
+    }
+
+    public Effect startDelay(float d){
+        startDelay = d;
+        return this;
     }
 
     public void init(){}
@@ -86,40 +94,84 @@ public class Effect{
         return this;
     }
 
+    public WrapEffect wrap(Color color){
+        return new WrapEffect(this, color);
+    }
+
+    public WrapEffect wrap(Color color, float rotation){
+        return new WrapEffect(this, color, rotation);
+    }
+
     public void at(Position pos){
-        create(this, pos.getX(), pos.getY(), 0, Color.white, null);
+        create(pos.getX(), pos.getY(), 0, Color.white, null);
     }
 
     public void at(Position pos, boolean parentize){
-        create(this, pos.getX(), pos.getY(), 0, Color.white, parentize ? pos : null);
+        create(pos.getX(), pos.getY(), 0, Color.white, parentize ? pos : null);
     }
 
     public void at(Position pos, float rotation){
-        create(this, pos.getX(), pos.getY(), rotation, Color.white, null);
+        create(pos.getX(), pos.getY(), rotation, Color.white, null);
     }
 
     public void at(float x, float y){
-        create(this, x, y, 0, Color.white, null);
+        create(x, y, 0, Color.white, null);
     }
 
     public void at(float x, float y, float rotation){
-        create(this, x, y, rotation, Color.white, null);
+        create(x, y, rotation, Color.white, null);
     }
 
     public void at(float x, float y, float rotation, Color color){
-        create(this, x, y, rotation, color, null);
+        create(x, y, rotation, color, null);
     }
 
     public void at(float x, float y, Color color){
-        create(this, x, y, 0, color, null);
+        create(x, y, 0, color, null);
     }
 
     public void at(float x, float y, float rotation, Color color, Object data){
-        create(this, x, y, rotation, color, data);
+        create(x, y, rotation, color, data);
     }
 
     public void at(float x, float y, float rotation, Object data){
-        create(this, x, y, rotation, Color.white, data);
+        create(x, y, rotation, Color.white, data);
+    }
+
+    public boolean shouldCreate(){
+        return !headless && this != Fx.none && Vars.renderer.enableEffects;
+    }
+
+    public void create(float x, float y, float rotation, Color color, Object data){
+        if(!shouldCreate()) return;
+
+        if(Core.camera.bounds(Tmp.r1).overlaps(Tmp.r2.setCentered(x, y, clip))){
+            if(!initialized){
+                initialized = true;
+                init();
+            }
+
+            if(startDelay <= 0f){
+                add(x, y, rotation, color, data);
+            }else{
+                Time.run(startDelay, () -> add(x, y, rotation, color, data));
+            }
+        }
+    }
+
+    protected void add(float x, float y, float rotation, Color color, Object data){
+        var entity = EffectState.create();
+        entity.effect = this;
+        entity.rotation = baseRotation + rotation;
+        entity.data = data;
+        entity.lifetime = lifetime;
+        entity.set(x, y);
+        entity.color.set(color);
+        if(followParent && data instanceof Posc p){
+            entity.parent = p;
+            entity.rotWithParent = rotWithParent;
+        }
+        entity.add();
     }
 
     public float render(int id, Color color, float life, float lifetime, float rotation, float x, float y, Object data){
@@ -159,27 +211,19 @@ public class Effect{
         shake(intensity, duration, loc.getX(), loc.getY());
     }
 
-    public static void create(Effect effect, float x, float y, float rotation, Color color, Object data){
-        if(headless || effect == Fx.none || !Core.settings.getBool("effects")) return;
+    public static void floorDust(float x, float y, float size){
+        Tile tile = world.tileWorld(x, y);
+        if(tile != null){
+            Color color = tile.getFloorColor();
+            Fx.unitLand.at(x, y, size, color);
+        }
+    }
 
-        if(Core.camera.bounds(Tmp.r1).overlaps(Tmp.r2.setCentered(x, y, effect.clip))){
-            if(!effect.initialized){
-                effect.initialized = true;
-                effect.init();
-            }
-
-            EffectState entity = EffectState.create();
-            entity.effect = effect;
-            entity.rotation = effect.baseRotation + rotation;
-            entity.data = data;
-            entity.lifetime = effect.lifetime;
-            entity.set(x, y);
-            entity.color.set(color);
-            if(effect.followParent && data instanceof Posc p){
-                entity.parent = p;
-                entity.rotWithParent = effect.rotWithParent;
-            }
-            entity.add();
+    public static void floorDustAngle(Effect effect, float x, float y, float angle){
+        Tile tile = world.tileWorld(x, y);
+        if(tile != null){
+            Color color = tile.getFloorColor();
+            effect.at(x, y, angle, color);
         }
     }
 
@@ -195,10 +239,10 @@ public class Effect{
 
         Decal decal = Decal.create();
         decal.set(x, y);
-        decal.rotation(rotation);
-        decal.lifetime(lifetime);
-        decal.color().set(color);
-        decal.region(region);
+        decal.rotation = rotation;
+        decal.lifetime = lifetime;
+        decal.color.set(color);
+        decal.region = region;
         decal.add();
     }
 
@@ -216,6 +260,32 @@ public class Effect{
 
         TextureRegion region = Core.atlas.find("rubble-" + blockSize + "-" + (Core.atlas.has("rubble-" + blockSize + "-1") ? Mathf.random(0, 1) : "0"));
         decal(region, x, y, Mathf.random(4) * 90, 3600, Pal.rubble);
+    }
+
+    public static void shockwaveDust(float x, float y, float rad){
+        shockwaveDust(x, y, rad, 1f);
+    }
+
+    public static void shockwaveDust(float x, float y, float rad, float density){
+        float spacing = 12f;
+        int waves = Math.max(1, Mathf.ceil(rad / spacing));
+        for(int i = 0; i < waves; i++){
+            int fi = i;
+            Time.run(i * 3.5f, () -> {
+                float radius = 1 + spacing * fi;
+                int rays = Mathf.ceil(radius * Mathf.PI * 2f / 6f * density);
+                for(int r = 0; r < rays; r++){
+                    if(Mathf.chance(0.7f - fi  * 0.02f)){
+                        float angle = r * 360f / (float)rays;
+                        float ox = Angles.trnsx(angle, radius), oy = Angles.trnsy(angle, radius);
+                        Tile t = world.tileWorld(x + ox, y + oy);
+                        if(t != null){
+                            Fx.podLandDust.at(t.worldx(), t.worldy(), angle + Mathf.range(30f), Tmp.c1.set(t.getFloorColor()).mul(1.7f + Mathf.range(0.15f)));
+                        }
+                    }
+                }
+            });
+        }
     }
 
     public static class EffectContainer implements Scaled{
@@ -238,6 +308,10 @@ public class Effect{
 
         public <T> T data(){
             return (T)data;
+        }
+
+        public EffectContainer inner(){
+            return innerContainer == null ? (innerContainer = new EffectContainer()) : innerContainer;
         }
 
         public void scaled(float lifetime, Cons<EffectContainer> cons){
